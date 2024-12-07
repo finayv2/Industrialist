@@ -1,0 +1,180 @@
+
+local Rotations = {
+    [0] = CFrame.Angles(-0, 0, -0),
+    [180] = CFrame.Angles(-3.1415927410125732, -8.742277657347586e-08, -3.1415927410125732),
+    [-90] = CFrame.Angles(-0, -1.5707963705062866, 0),
+    [90] = CFrame.Angles(0, 1.5707963705062866, 0),
+}
+
+local Decoded;
+local Whitelists = {}
+
+local HttpService = game:FindService("HttpService")
+local ReplicatedStorage = game:FindService('ReplicatedStorage')
+local PlacementSystem = ReplicatedStorage:WaitForChild('PlacementSystem')
+
+local Buildings = PlacementSystem:WaitForChild('Buildings')
+
+function GetAllObjects(Tbl)
+    local Objects = {}
+
+    if #Whitelists < 1 then
+        for i,v in pairs(game:GetService("Workspace").Plots:GetChildren()) do
+            if not Tbl['Blacklist'][v.Name] then
+                Whitelists[v] = true
+            end
+        end
+    end
+
+    for i,v in pairs(game:GetService("Workspace").Plots:GetDescendants()) do
+        if Whitelists[v.Parent] then
+            local Connector = nil;
+            local ConnectedTo = {};
+
+            for _,P in pairs(v:GetChildren()) do
+                if string.find(P.Name, 'Connector') then
+                    for _,c in pairs(P:GetChildren()) do
+                        if c:IsA('RopeConstraint') then
+                            ConnectedTo[#ConnectedTo + 1] = {
+                                ['OurName'] = c.Parent.Name,
+                                ['Model'] = c.Attachment1.Parent.Parent.Name, 
+                                ['Connector'] = c.Attachment1.Parent.Name,
+                            }
+                        end
+                    end
+                end
+                _, P = nil;
+            end
+
+            Objects[v.Name] = {
+                ['Object'] = v:GetAttribute('Name'),
+                ['CFrame'] = {
+                    v.Root.CFrame.X,
+                    v.Root.CFrame.Y,
+                    v.Root.CFrame.Z,
+                },
+                ['Angle'] = {v.Root.Orientation.Y},
+
+                ['Model'] = v,
+                ['ModelNumber'] = v.Name,
+                ['ModelParent'] = v:GetAttribute("Category"),
+                ['ConnectedTo'] = ConnectedTo,
+            }
+        end
+    end
+
+    return Objects
+end
+
+function FindModel(Name)
+    for i,v in pairs(Buildings:GetDescendants()) do
+        if v.Name == Name then
+            return v
+        end
+    end
+end
+
+local Connection;
+local PlaceBind = PlacementSystem:WaitForChild('PlaceBind')
+function PlaceObject(Object, Cframe, Rotation, Category, OldName)
+    Object = FindModel(Object)
+    Cframe = CFrame.new(Cframe[1],Cframe[2],Cframe[3])
+    Rotation = Rotations[Rotation[1]]
+
+    Connection = game.Workspace.Plots[Category].ChildAdded:Connect(function(Child)
+        NewModel = Child
+
+        Decoded[OldName]['Model'] = NewModel
+
+        if Connection then
+            Connection:Disconnect()
+        end
+    end)
+
+    PlaceBind:InvokeServer(Object, Cframe * Rotation, nil, true, true, true)
+
+end 
+
+local WireBind = PlacementSystem:WaitForChild('WireBind')
+function ConnectPower()
+    for _,D in pairs(Decoded) do
+        if #D['ConnectedTo'] > 0 then
+            for i,v in pairs(D['ConnectedTo']) do
+                local OurName = v['OurName']
+
+                local ConnectedConnector = v['Connector']
+                local OldConnectorName = v['Model']
+
+                
+                WireBind:InvokeServer(D['Model'][OurName], Decoded[OldConnectorName]['Model'][ConnectedConnector])
+            end
+        end
+        task.wait()
+    end
+end
+
+
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/finayv2/Ui-Lib/refs/heads/main/Enima.lua"))()
+local MainWindow = Library:AddWindow('Industrialist')
+local Tab = MainWindow:AddTab('Main')
+
+local Status = Tab:AddConsole({
+	["y"] = 140,
+	["readonly"] = true,
+	["source"] = "Lua",
+})
+Status:Log('Must have enough money and unlocked')
+Status:Log('Add file name (press enter)')
+
+local FileName;
+Tab:AddTextBox("File Name", function(File)
+	FileName = File
+end, {["clear"] = false,})
+
+Tab:AddButton("Save Buildings", function()
+    if FileName == ' ' or FileName == '' or not FileName then Status:Log('Add file name') return end
+	local AllObjects = GetAllObjects({
+        ['Blacklist'] = {
+            ['PipeConnectionDecoration'] = true;
+            ['Decorations'] = true;
+        },
+    })
+    
+    local EncodedTable = HttpService:JSONEncode(AllObjects)
+
+    if not isfolder('Industrialist') then
+        makefolder('Industrialist')
+    end
+
+    writefile('Industrialist/'..FileName..'.cfg', EncodedTable)
+
+    Status:Log('Saved to ' .. FileName..'!')
+end)
+
+Tab:AddButton("Load Buildings", function()
+    if FileName == ' ' or FileName == '' or not FileName then Status:Log('Add file name') return end
+    if not isfolder('Industrialist') then
+        Status:Log('No saves or folder found.')
+        return
+    end
+
+    if not isfile('Industrialist/'..FileName..'.cfg') then
+        Status:Log('No save found.')
+        return
+    end
+
+    Status:Log('Loading...')
+
+    Decoded = HttpService:JSONDecode(readfile('Industrialist/'..FileName..'.cfg'))
+    for i,v in pairs(Decoded) do
+        PlaceObject(v['Object'], v['CFrame'], v['Angle'], v['ModelParent'], v['ModelNumber'])
+        task.wait()
+    end
+    
+    ConnectPower()
+
+    Status:Log('Loaded!')
+end)
+
+Library:FormatWindows()
+Tab:Show()
